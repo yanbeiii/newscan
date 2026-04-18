@@ -1,0 +1,22 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    default-libmysqlclient-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY backend/ ./backend/
+COPY scripts/ ./scripts/
+COPY config/ ./config/
+
+ENV PYTHONPATH=/app
+
+EXPOSE 5000
+
+CMD ["sh", "-c", "python -c \"import sys; sys.path.insert(0, '.'); from scripts.init_db import init_database; init_database()\" && python backend/app.py"]
