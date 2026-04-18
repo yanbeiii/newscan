@@ -3,10 +3,10 @@ import logging
 from datetime import datetime
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
-from models import db, Alert, MinuteStats, HourlyStats, AttackType
+from backend.models import db, Alert, MinuteStats, HourlyStats, AttackType
 from flask import Flask
 from flask_socketio import SocketIO
-from config import Config
+from backend.config import Config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

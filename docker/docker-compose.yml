@@ -69,6 +69,8 @@ services:
       MYSQL_PASSWORD: malware_monitor_2024
       MYSQL_DATABASE: malicious_traffic
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: malicious_traffic
+      ENABLE_KAFKA: "true"
       SURICATA_LOG_PATH: /var/log/suricata/eve.json
     depends_on:
       mysql:
@@ -79,13 +81,12 @@ services:
       - malware-monitor
 
   nginx:
-    image: nginx:alpine
+    build:
+      context: ..
+      dockerfile: Dockerfile.frontend
     container_name: nginx
     ports:
       - "8080:80"
-    volumes:
-      - ../frontend/dist:/usr/share/nginx/html
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - backend
     networks:

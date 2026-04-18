@@ -91,6 +91,7 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { Warning, CircleClose, CloseBold, WarningFilled } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
+import { io } from 'socket.io-client'
 import api from '../utils/api'
 
 const stats = ref({
@@ -108,6 +109,7 @@ const trendChartRef = ref(null)
 const pieChartRef = ref(null)
 let trendChart = null
 let pieChart = null
+let resizeHandler = null
 
 let socket = null
 
@@ -198,12 +200,15 @@ onMounted(async () => {
     updatePieChart()
   }
 
-  window.addEventListener('resize', () => {
+  resizeHandler = () => {
     trendChart?.resize()
     pieChart?.resize()
-  })
+  }
+  window.addEventListener('resize', resizeHandler)
 
-  socket = io('http://localhost:5000')
+  socket = io('/', {
+    transports: ['websocket', 'polling']
+  })
 
   socket.on('connect', () => {
     console.log('WebSocket connected')
@@ -230,7 +235,9 @@ onUnmounted(() => {
   if (socket) {
     socket.disconnect()
   }
-  window.removeEventListener('resize', () => {})
+  if (resizeHandler) {
+    window.removeEventListener('resize', resizeHandler)
+  }
 })
 </script>
 

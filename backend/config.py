@@ -1,5 +1,13 @@
 import os
 
+
+def env_bool(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'malicious-traffic-monitor-secret-key-2024')
 
@@ -17,7 +25,8 @@ class Config:
     }
 
     KAFKA_BOOTSTRAP_SERVERS = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', 'kafka:9092')
-    KAFKA_TOPIC = 'malicious_traffic'
+    KAFKA_TOPIC = os.environ.get('KAFKA_TOPIC', 'malicious_traffic')
+    ENABLE_KAFKA = env_bool('ENABLE_KAFKA', False)
 
     SURICATA_LOG_PATH = os.environ.get('SURICATA_LOG_PATH', '/var/log/suricata/eve.json')
 

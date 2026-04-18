@@ -1,13 +1,14 @@
-import sys
-import os
-import json
-import time
 from datetime import datetime, timedelta
+import os
+import random
+import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
-from models import db, Alert, MinuteStats, HourlyStats, AttackType
-from app import create_app
+from backend.app import create_app
+from backend.models import db, Alert, MinuteStats, HourlyStats, AttackType
 
 SIGNATURES = [
     ("ET SCAN Potential SSH Scan", "Attempted Information Leak", 2),
@@ -33,9 +34,6 @@ ACTIONS = ['alert', 'drop', 'pass']
 
 def generate_ip():
     return f"{random.randint(1, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
-
-
-import random
 
 
 def generate_alert(base_time=None):
@@ -81,6 +79,7 @@ def insert_mock_data(count=200):
     app = create_app()
 
     with app.app_context():
+        db.create_all()
         print(f"Starting to insert {count} mock alerts...")
 
         base_time = datetime.utcnow() - timedelta(hours=24)

@@ -72,6 +72,7 @@ const attackTypeChartRef = ref(null)
 const trendChartRef = ref(null)
 let attackTypeChart = null
 let trendChart = null
+let resizeHandler = null
 
 const attackTypeData = ref([])
 const trendData = ref([])
@@ -173,14 +174,17 @@ onMounted(async () => {
     updateTrendChart()
   }
 
-  window.addEventListener('resize', () => {
+  resizeHandler = () => {
     attackTypeChart?.resize()
     trendChart?.resize()
-  })
+  }
+  window.addEventListener('resize', resizeHandler)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', () => {})
+  if (resizeHandler) {
+    window.removeEventListener('resize', resizeHandler)
+  }
 })
 </script>
 

@@ -5,12 +5,208 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, and_
 from backend.models import db, Alert, MinuteStats, HourlyStats, AttackType
 from backend.config import Config
+import json
+import logging
+import threading
+from kafka import KafkaConsumer
+from kafka.errors import KafkaError
 
-app = Flask(__name__)
-app.config.from_object(Config)
-CORS(app, resources={r"/api/*": {"origins": Config.CORS_ORIGINS}})
-db.init_app(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+socketio = SocketIO(cors_allowed_origins="*", async_mode='gevent')
+
+
+def create_app():
+    app = Flask(__name__)
+    app.config.from_object(Config)
+    CORS(app, resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}})
+    db.init_app(app)
+    socketio.init_app(app)
+    return app
+
+
+app = create_app()
+
+
+def parse_iso_datetime(time_str):
+    if not time_str:
+        return None
+    if time_str.endswith('Z'):
+        time_str = time_str[:-1] + '+00:00'
+    try:
+        return datetime.fromisoformat(time_str)
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_severity(severity):
+    severity = int(severity) if severity else 3
+    if severity == 1:
+        return 1
+    elif severity == 2:
+        return 2
+    elif severity in [3, 4]:
+        return 3
+    else:
+        return 4
+
+
+def update_stats(alert_data):
+    try:
+        timestamp = parse_iso_datetime(alert_data.get('timestamp'))
+        if not timestamp:
+            timestamp = datetime.utcnow()
+    except:
+        timestamp = datetime.utcnow()
+
+    minute = timestamp.replace(second=0, microsecond=0)
+    hour = timestamp.replace(minute=0, second=0, microsecond=0)
+
+    severity = parse_severity(alert_data.get('severity'))
+
+    minute_stat = MinuteStats.query.filter_by(minute=minute).first()
+    if not minute_stat:
+        minute_stat = MinuteStats(
+            minute=minute,
+            total_alerts=0,
+            critical_count=0,
+            high_count=0,
+            medium_count=0,
+            low_count=0
+        )
+        db.session.add(minute_stat)
+
+    minute_stat.total_alerts += 1
+    if severity == 1:
+        minute_stat.critical_count += 1
+    elif severity == 2:
+        minute_stat.high_count += 1
+    elif severity == 3:
+        minute_stat.medium_count += 1
+    else:
+        minute_stat.low_count += 1
+
+    hourly_stat = HourlyStats.query.filter_by(hour=hour).first()
+    if not hourly_stat:
+        hourly_stat = HourlyStats(
+            hour=hour,
+            total_alerts=0,
+            critical_count=0,
+            high_count=0,
+            medium_count=0,
+            low_count=0
+        )
+        db.session.add(hourly_stat)
+
+    hourly_stat.total_alerts += 1
+    if severity == 1:
+        hourly_stat.critical_count += 1
+    elif severity == 2:
+        hourly_stat.high_count += 1
+    elif severity == 3:
+        hourly_stat.medium_count += 1
+    else:
+        hourly_stat.low_count += 1
+
+    attack_type = alert_data.get('category', 'Unknown')
+    attack_stat = AttackType.query.filter_by(hour=hour, attack_type=attack_type).first()
+    if not attack_stat:
+        attack_stat = AttackType(hour=hour, attack_type=attack_type, count=0)
+        db.session.add(attack_stat)
+
+    attack_stat.count += 1
+    db.session.commit()
+
+
+def process_alert(alert_data):
+    timestamp = parse_iso_datetime(alert_data.get('timestamp'))
+    if not timestamp:
+        timestamp = datetime.utcnow()
+
+    severity = parse_severity(alert_data.get('severity'))
+
+    alert = Alert(
+        timestamp=timestamp,
+        src_ip=alert_data.get('src_ip'),
+        dst_ip=alert_data.get('dst_ip'),
+        src_port=alert_data.get('src_port'),
+        dst_port=alert_data.get('dst_port'),
+        protocol=alert_data.get('protocol'),
+        severity=severity,
+        signature=alert_data.get('signature'),
+        category=alert_data.get('category'),
+        action=alert_data.get('action'),
+        raw_json=alert_data.get('raw_json')
+    )
+
+    db.session.add(alert)
+    db.session.commit()
+
+    update_stats(alert_data)
+
+    alert_summary = {
+        'id': alert.id,
+        'timestamp': alert.timestamp.isoformat(),
+        'src_ip': alert.src_ip,
+        'dst_ip': alert.dst_ip,
+        'protocol': alert.protocol,
+        'severity': alert.severity,
+        'signature': alert.signature,
+        'category': alert.category
+    }
+    socketio.emit('new_alert', alert_summary)
+
+    total = Alert.query.count()
+    critical = Alert.query.filter_by(severity=1).count()
+    high = Alert.query.filter_by(severity=2).count()
+    medium = Alert.query.filter_by(severity=3).count()
+    low = Alert.query.filter_by(severity=4).count()
+
+    stats_update = {
+        'total_alerts': total,
+        'critical_count': critical,
+        'high_count': high,
+        'medium_count': medium,
+        'low_count': low
+    }
+    socketio.emit('stats_update', stats_update)
+
+    logger.info(f"Processed alert: {alert.signature}")
+    return alert_summary
+
+
+def start_kafka_consumer(app):
+    bootstrap_servers = app.config.get('KAFKA_BOOTSTRAP_SERVERS') or 'kafka:9092'
+    topic = app.config.get('KAFKA_TOPIC', 'malicious_traffic')
+    group_id = 'malicious_traffic_consumer_group'
+
+    try:
+        consumer = KafkaConsumer(
+            topic,
+            bootstrap_servers=bootstrap_servers,
+            group_id=group_id,
+            value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+            auto_offset_reset='earliest',
+            enable_auto_commit=True
+        )
+        logger.info("Kafka consumer started")
+
+        def consume_messages():
+            for message in consumer:
+                try:
+                    alert_data = message.value
+                    with app.app_context():
+                        process_alert(alert_data)
+                except Exception as e:
+                    logger.error(f"Error processing message: {e}")
+
+        consumer_thread = threading.Thread(target=consume_messages, daemon=True)
+        consumer_thread.start()
+    except KafkaError as e:
+        logger.error(f"Kafka consumer error: {e}")
+    except Exception as e:
+        logger.error(f"Failed to start Kafka consumer: {e}")
 
 
 @app.route('/api/health', methods=['GET'])
@@ -32,9 +228,15 @@ def get_alerts():
     query = Alert.query
 
     if start_time:
-        query = query.filter(Alert.timestamp >= datetime.fromisoformat(start_time))
+        parsed_start = parse_iso_datetime(start_time)
+        if parsed_start is None:
+            return jsonify({'error': 'Invalid start_time format'}), 400
+        query = query.filter(Alert.timestamp >= parsed_start)
     if end_time:
-        query = query.filter(Alert.timestamp <= datetime.fromisoformat(end_time))
+        parsed_end = parse_iso_datetime(end_time)
+        if parsed_end is None:
+            return jsonify({'error': 'Invalid end_time format'}), 400
+        query = query.filter(Alert.timestamp <= parsed_end)
     if src_ip:
         query = query.filter(Alert.src_ip == src_ip)
     if dst_ip:
@@ -106,12 +308,16 @@ def get_trend():
     end_time = request.args.get('end_time')
 
     if start_time:
-        start = datetime.fromisoformat(start_time)
+        start = parse_iso_datetime(start_time)
+        if start is None:
+            return jsonify({'error': 'Invalid start_time format'}), 400
     else:
         start = datetime.utcnow() - timedelta(days=7)
 
     if end_time:
-        end = datetime.fromisoformat(end_time)
+        end = parse_iso_datetime(end_time)
+        if end is None:
+            return jsonify({'error': 'Invalid end_time format'}), 400
     else:
         end = datetime.utcnow()
 
@@ -153,12 +359,16 @@ def get_attack_types():
     end_time = request.args.get('end_time')
 
     if start_time:
-        start = datetime.fromisoformat(start_time)
+        start = parse_iso_datetime(start_time)
+        if start is None:
+            return jsonify({'error': 'Invalid start_time format'}), 400
     else:
         start = datetime.utcnow() - timedelta(days=7)
 
     if end_time:
-        end = datetime.fromisoformat(end_time)
+        end = parse_iso_datetime(end_time)
+        if end is None:
+            return jsonify({'error': 'Invalid end_time format'}), 400
     else:
         end = datetime.utcnow()
 
@@ -229,4 +439,8 @@ def handle_request_stats():
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
+    if app.config.get('ENABLE_KAFKA'):
+        start_kafka_consumer(app)
+    else:
+        logger.info("Kafka consumer disabled; running in API-only mode")
     socketio.run(app, host='0.0.0.0', port=5000, debug=False, use_reloader=False)

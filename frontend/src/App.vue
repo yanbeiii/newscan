@@ -54,7 +54,7 @@ const connected = ref(false)
 const activeMenu = computed(() => route.path)
 
 onMounted(() => {
-  socket.value = io('http://localhost:5000', {
+  socket.value = io('/', {
     transports: ['websocket', 'polling']
   })
 
